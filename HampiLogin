@@ -1,0 +1,335 @@
+import React, { useContext, useRef, useState } from 'react';
+import "../Styles/HampiLogin.css";
+import { useFormik } from "formik";
+import * as yup from "yup";
+import {CircularProgress, TextField} from "@mui/material";
+import logo from "../Images/MainLogo.png";
+import { useNavigate } from 'react-router-dom';
+import { AuthContext } from '../context/AuthContext';
+import ToastComponent from '../components/ToastComponent';
+import { userApiUrl } from '../utils/GetUrl';
+import { format } from "date-fns";
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  Typography,
+  Box,
+  Checkbox,
+  FormControlLabel
+} from "@mui/material";
+const validationSchema = yup.object({
+    email: yup.string().trim().email("Enter a valid email").required("Email is required"),
+    password: yup.string().required("Password is required"),
+});
+
+export default function HampiLogin() {
+    const navigate = useNavigate();
+    const [loading, setLoading] = useState(false);
+    const [showPledgeModal, setShowPledgeModal] = useState(false);
+    const [pendingLoginUser, setPendingLoginUser] = useState(null);
+    const toastRef = useRef();
+
+    const { login, getUserInfo, token ,userData} = useContext(AuthContext);
+    const [isChecked, setIsChecked] = useState(false);
+    const user = userData?.[0];
+    const employeeName = user?.EM_FirstName ?? "Employee";
+    const employeeId = user?.EM_ID ?? "N/A";
+    const startOfMonth = format(new Date(), "01-MM-yyyy");
+    const endOfMonth = format(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0), "dd-MM-yyyy");
+    
+    const handleCheckboxChange = (e) => setIsChecked(e.target.checked);
+    
+    const formik = useFormik({
+        initialValues: {
+            email: '',
+            password: '',
+        },
+        validationSchema,
+        onSubmit: async (values) => {
+            setLoading(true);
+            try {
+                const loginRes = await login(values);
+                if (!loginRes?.Token) {
+                    toastRef.current.showToast('Invalid Credentials', 'error');
+                    return;
+                }
+
+                await getUserInfo(loginRes?.Id);
+                setPendingLoginUser(loginRes);
+                setShowPledgeModal(true);
+
+            } catch (error) {
+                console.error("Login Error:", error);
+                toastRef.current.showToast('Login failed. Try again.', 'error');
+            } finally {
+                setLoading(false);
+            }
+        },
+    });
+
+    const proceedWithLogin = async (user) => {
+        const { DR_ID, Firstlogin } = user;
+
+        if (DR_ID === "7") {
+            toastRef.current.showToast('Guest User does not have Add or Edit access');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            navigate('/VoucherReports');
+        } else if (!Firstlogin) {
+            toastRef.current.showToast('Logged in Successfully', 'success');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            navigate('/dashboard');
+        } else {
+            toastRef.current.showToast('Logged in Successfully', 'success');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            navigate('/HampiReset');
+        }
+    };
+
+    const handleAcceptPledge = async () => {
+        try {
+            const res = await fetch(`${userApiUrl}/AddPolicyAcceptance`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                    UserId: user?.EM_ID,
+                    Acceptance: true,
+                    PolicyId: "1",
+                }),
+            });
+    
+            if (!res.ok) throw new Error('Pledge acceptance failed');
+    
+            toastRef.current.showToast('Pledge accepted', 'success');
+            setShowPledgeModal(false);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            await proceedWithLogin(pendingLoginUser);
+    
+        } catch (error) {
+            console.error("handleAcceptPledge error:", error);
+            toastRef.current.showToast('Failed to accept pledge. Try again.', 'error');
+        }
+    };
+    
+    
+    return (
+        <div className='main-l'>
+            <ToastComponent ref={toastRef} timeout={4000} />
+            <div className='Container-l'>
+                <div>
+                    <div className='img1'>
+                        <img className='img-logo' loading="lazy" src={logo} alt="Logo" />
+                    </div>
+                    <div className='title'>LOG IN</div>
+                </div>
+                <form onSubmit={formik.handleSubmit}>
+                    <div className='main-user-info'>
+                        <div className='user-input-box'>Email</div>
+                        <TextField
+                            autoFocus fullWidth name="email"
+                            style={{ width: '450px', marginBottom: '20px' }}
+                            placeholder="Enter Email"
+                            value={formik.values.email}
+                            onChange={formik.handleChange}
+                            error={formik.touched.email && Boolean(formik.errors.email)}
+                            helperText={formik.touched.email && formik.errors.email}
+                        />
+                        <div className='user-input-box'>Password</div>
+                        <TextField
+                            fullWidth name="password" type="password"
+                            style={{ width: '450px', marginBottom: '20px' }}
+                            placeholder="Enter Password"
+                            value={formik.values.password}
+                            onChange={formik.handleChange}
+                            error={formik.touched.password && Boolean(formik.errors.password)}
+                            helperText={formik.touched.password && formik.errors.password}
+                        />
+                    </div>
+
+                    {loading ? (
+                        <div className="input-field">
+                            <CircularProgress style={{ color: 'purple' }} />
+                        </div>
+                    ) : (
+                        <button
+                            type="submit"
+                            style={{
+                                width: '100%',
+                                color: 'white',
+                                padding: '8px',
+                                borderRadius: '5px',
+                                background: '#50145A'
+                            }}
+                        >
+                            Log In
+                        </button>
+                    )}
+                </form>
+            </div>
+            <Dialog open={showPledgeModal} maxWidth="md" fullWidth>
+  <DialogTitle>Data Security Pledge – {format(new Date(), "MMMM yyyy")}</DialogTitle>
+  <DialogContent>
+    <Typography gutterBottom>
+      <strong>MY SOLEMN PLEDGE ON DATA PRIVACY AND INFORMATION SECURITY</strong>
+    </Typography>
+
+    <Typography gutterBottom>
+      I, <strong>{employeeName}</strong>, hereby pledge that I will follow the VIEW Synergy Policy in respect to Data Privacy and Information Security for the period from{" "}
+      <strong>{startOfMonth}</strong> to <strong>{endOfMonth}</strong>.
+    </Typography>
+
+    <ul style={{ paddingLeft: "1.5rem" }}>
+      {[
+        "Review and comply with VIEW Synergy's IT Policy, ensuring personal responsibility for adherence.",
+        "Use strong passwords and never share them with anyone.",
+        "Not write my password anywhere which may be easily accessible by others.",
+        "Not discuss any sensitive matter relating to my clients in public places, or in common areas within the office.",
+        "Not leave any client related or VIEW Synergy related information unattended.",
+        "Not share confidential data and shred hard copies immediately after use.",
+        "Lock my computer whenever I leave my work area and secure from fraudsters.",
+        "Protect mobile devices in my possession physically as well as by using applicable security features.",
+        "Safeguard VIEW Synergy and Client confidential data from unauthorized access, disclosure, loss or theft.",
+        "NOT post personal, confidential or non-public information on social media.",
+        "Adhere data security policy laid out by VIEW Synergy and promptly report all security incidents, breaches, suspected activities to my immediate supervisor / management."
+      ].map((item, index) => (
+        <li key={index}>
+          <Typography variant="body2">{item}</Typography>
+        </li>
+      ))}
+    </ul>
+
+    <Typography gutterBottom>
+      I hereby offer to hold myself liable to any disciplinary action by the management for any lapses, whatsoever.
+    </Typography>
+
+    <Typography gutterBottom>
+      <strong>EMPLOYEE NON-DISCLOSURE AGREEMENT AND SECURITY GUIDELINES</strong>
+    </Typography>
+
+    <Typography gutterBottom>
+      This agreement (the “Agreement”) is entered into by VIEW Synergy Private Limited (the “Company”) and the “Employee”
+    </Typography>
+
+    <Typography gutterBottom>
+      <strong>SCOPE</strong>: This Agreement shall apply when the Employee is working and performing services on behalf of a company that at all times is part of VIEW Group.
+    </Typography>
+
+    <Typography gutterBottom>
+      <strong>NONDISCLOSURE</strong>: In the performance of Employee’s job duties with Company, Employee will be exposed to Company’s Confidential Information...
+    </Typography>
+
+    <Typography gutterBottom>
+      <strong>E-MAILS AND COMPANY’S PROFESSIONAL SYSTEMS</strong>: The Employee shall consider the duty of confidentiality internally, both when using the professional systems and in the dialogue between colleagues...
+    </Typography>
+
+    <Box mt={3}>
+      <Typography>Name: <strong>{employeeName}</strong></Typography>
+      <Typography>Employee ID: <strong>{employeeId}</strong></Typography>
+      <Typography>Date: <strong>{format(new Date(), "dd-MM-yyyy")}</strong></Typography>
+      <FormControlLabel
+        control={<Checkbox checked={isChecked} onChange={handleCheckboxChange} />}
+        label="I have read and accept the data protection policy."
+      />
+    </Box>
+  </DialogContent>
+
+  <DialogActions>
+    <Button onClick={() => setShowPledgeModal(false)}>Reject</Button>
+    <Button
+      variant="contained"
+      disabled={!isChecked}
+      onClick={handleAcceptPledge}
+      style={{ backgroundColor: "#50145A" }}
+    >
+      Accept
+    </Button>
+  </DialogActions>
+</Dialog>
+
+        </div>
+    );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<DialogContent>
+<Typography gutterBottom>
+  <strong>MY SOLEMN PLEDGE ON DATA PRIVACY AND INFORMATION SECURITY</strong>
+</Typography>
+
+<Typography gutterBottom>
+  I, <strong>{employeeName}</strong>, hereby pledge that I will follow the VIEW Synergy Policy in respect to Data Privacy and Information Security for the period from{" "}
+  <strong>{startOfMonth}</strong> to <strong>{endOfMonth}</strong>.
+</Typography>
+
+<ul style={{ paddingLeft: "1.5rem" }}>
+  {[
+    "Review and comply with VIEW Synergy's IT Policy, ensuring personal responsibility for adherence.",
+    "Use strong passwords and never share them with anyone.",
+    "Not write my password anywhere which may be easily accessible by others.",
+    "Not discuss any sensitive matter relating to my clients in public places, or in common areas within the office.",
+    "Not leave any client related or VIEW Synergy related information unattended.",
+    "Not share confidential data and shred hard copies immediately after use.",
+    "Lock my computer whenever I leave my work area and secure from fraudsters.",
+    "Protect mobile devices in my possession physically as well as by using applicable security features.",
+    "Safeguard VIEW Synergy and Client confidential data from unauthorized access, disclosure, loss or theft.",
+    "NOT post personal, confidential or non-public information on social media.",
+    "Adhere data security policy laid out by VIEW Synergy and promptly report all security incidents, breaches, suspected activities to my immediate supervisor / management."
+  ].map((item, index) => (
+    <li key={index}>
+      <Typography variant="body2">{item}</Typography>
+    </li>
+  ))}
+</ul>
+
+<Typography gutterBottom>
+  I hereby offer to hold myself liable to any disciplinary action by the management for any lapses, whatsoever.
+</Typography>
+
+<Typography gutterBottom>
+  <strong>EMPLOYEE NON-DISCLOSURE AGREEMENT AND SECURITY GUIDELINES</strong>
+</Typography>
+
+<Typography gutterBottom>
+  This agreement (the “Agreement”) is entered into by VIEW Synergy Private Limited (the “Company”) and the “Employee”
+</Typography>
+
+<Typography gutterBottom>
+  <strong>SCOPE</strong>: This Agreement shall apply when the Employee is working and performing services on behalf of a company that at all times is part of VIEW Group.
+</Typography>
+
+<Typography gutterBottom>
+  <strong>NONDISCLOSURE</strong>: In the performance of Employee’s job duties with Company, Employee will be exposed to Company’s Confidential Information...
+</Typography>
+
+<Typography gutterBottom>
+  <strong>E-MAILS AND COMPANY’S PROFESSIONAL SYSTEMS</strong>: The Employee shall consider the duty of confidentiality internally, both when using the professional systems and in the dialogue between colleagues...
+</Typography>
+
+<Box mt={3}>
+  <Typography>Name: <strong>{employeeName}</strong></Typography>
+  <Typography>Employee ID: <strong>{employeeId}</strong></Typography>
+  <Typography>Date: <strong>{format(new Date(), "dd-MM-yyyy")}</strong></Typography>
+  <FormControlLabel
+    control={<Checkbox checked={isChecked} onChange={handleCheckboxChange} />}
+    label="I have read and accept the data protection policy."
+  />
+</Box>
+</DialogContent>
+
