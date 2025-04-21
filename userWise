@@ -1,0 +1,727 @@
+import React, { useContext, useEffect, useState, useRef } from "react";
+import "../Styles/WeekelyTimesheet2.css";
+import "../Styles/WeekelyTimesheet1.css";
+import "../Styles/ContentWeek.css";
+import "../Styles/Activitywise2.css";
+import "../Styles/Userwise2.css";
+import "../Styles/Footerweek.css";
+import { CircularProgress } from "@mui/material";
+import { UserContext } from "../context/UserContext";
+import { AuthContext } from "../context/AuthContext";
+import * as XLSX from "xlsx";
+import "../Styles/Footerweek.css";
+import { Info } from '@mui/icons-material';
+import {
+  clientApiUrl,
+  taskApiUrl,
+  notificationApiUrl,
+  userApiUrl,
+} from "../utils/GetUrl";
+import ToastComponent from "./ToastComponent";
+import Footerweek from "./Footerweek";
+function Userwise2({
+  downloadFile,
+  setDownloadFile,
+  selectedDate,
+  selectedEmployees,
+  selectedTeams,
+  teams,
+  setSelectedTeams,
+  selectedIds,
+  selectedTimeCode,
+  selectedCostCenters,
+}) {
+
+  
+  const [totalTime, setTotalTime] = useState(0);
+  const [difference, setDifference] = useState(0);
+  const { teamsData, setTeamsData, teamNames, setTeamNames, fetchTeams } =
+    useContext(UserContext);
+  const [userReport, setUserReport] = useState([]);
+  const { token, logout } = useContext(AuthContext);
+  const generateDates = (startDate) => {
+    const dates = [];
+    const currentDate = new Date(
+      startDate.getFullYear(),
+      startDate.getMonth(),
+      1
+    );
+    const numDays = new Date(
+      currentDate.getFullYear(),
+      currentDate.getMonth() + 1,
+      0
+    ).getDate();
+    for (let i = 0; i < numDays; i++) {
+      dates.push(new Date(currentDate));
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    return dates;
+  };
+
+  const today = new Date();
+  const defaultSelectedDate = selectedDate ? new Date(selectedDate) : today;
+  const firstDayOfMonth = new Date(
+    defaultSelectedDate.getFullYear(),
+    defaultSelectedDate.getMonth(),
+    1
+  );
+  const dates = generateDates(firstDayOfMonth);
+
+  const getDayOfWeek = (date) => {
+    const daysOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    return daysOfWeek[date.getDay()];
+  };
+  const getStartDate = (dateString) => {
+    const date = dateString ? new Date(dateString) : new Date();
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1; // getMonth() is zero-based, so add 1
+    return `${year}-${String(month).padStart(2, "0")}-01`;
+  };
+  const getEndDate = (dateString) => {
+    const date = dateString ? new Date(dateString) : new Date();
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1; // getMonth() is zero-based, so add 1
+    const lastDay = new Date(year, month, 0).getDate(); // get the last day of the month
+    return `${year}-${String(month).padStart(2, "0")}-${String(
+      lastDay
+    ).padStart(2, "0")}`;
+  };
+  const formatSelectedEmployees = (selected) => {
+    const emIds = selected?.map((item) => `'${item["EM_ID"]}'`);
+    return emIds?.join(",");
+  };
+  useEffect(() => {
+    formatSelectedEmployees(selectedEmployees);
+  }, [selectedEmployees, selectedTeams, token]);
+
+  const toastRef = useRef();
+  const [loading, setLoading] = useState(false);
+  const fetchUserWise = async () => {
+    if(!token){
+      return;
+    }
+    setLoading(true);
+    const chunkSize = 10;
+
+    const fetchInChunks = async (startIndex) => {
+      const endIndex = Math.min(
+        startIndex + chunkSize,
+        selectedEmployees?.length
+      );
+      const chunk = selectedEmployees?.slice(startIndex, endIndex);
+      try {
+        const response = await fetch(
+          `${taskApiUrl}/GetAllTaskReport?` +
+            `DateRange1=${getStartDate(selectedDate)}` +
+            `&DateRange2=${getEndDate(selectedDate)}` +
+            `&AssginedToEmids=${formatSelectedEmployees(chunk)}` +
+            `${selectedIds ? `&DepartmentId=${selectedIds}` : ""}` +
+            `${selectedTimeCode ? `&TimeCode=${selectedTimeCode}` : ""}` +
+            `${
+              selectedCostCenters ? `&CostCenters=${selectedCostCenters}` : ""
+            }`,
+          {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (response.status === 401) {
+          toastRef.current.showToast(
+            "Unauthorised access. Please login again.",
+            "error"
+          );
+          await logout();
+          return;
+        }
+
+        const data = await response.json();
+        setUserReport((prevData) => [...prevData, ...data]);
+
+        if (endIndex < selectedEmployees.length) {
+          await fetchInChunks(endIndex);
+        }
+      } catch (e) {
+        //console.log(e);
+      }
+    };
+
+    // Start fetching with the first chunk
+    if (selectedEmployees?.length > 0) {
+      // Set loading to true before starting fetch
+      setUserReport([]); // Clear the previous report
+      await fetchInChunks(0);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchUserWise();
+  }, [selectedDate, selectedEmployees, selectedIds, selectedTimeCode, token]);
+
+  const processUserReport = (userReport, dates) => {
+    const dateStrs = dates.map((date) => date.toISOString().split("T")[0]);
+  
+    return selectedEmployees?.map((employee) => {
+      const emId = employee["EM_ID"];
+      const emName = employee["EM_FirstName"] + " " + employee["EM_LastName"];
+      const emTeam = teamNames?.filter((t) => t.id == employee["STM_Team"])?.[0]
+        ?.name;
+      const employeeReport = userReport.find(
+        (report) => report.AssginedTo === emId
+      );
+  
+      const dateMap = {};
+      let emViewForceTime = 0; // Total time visible for forced viewing (in minutes)
+      let emTotalTime = 0; // Total calculated task time (in hours)
+  
+      if (employeeReport) {
+        emViewForceTime = employeeReport.TotalRegisterTime || 0; // Keep in minutes
+  
+        employeeReport.taskReportResponse.forEach((task) => {
+          const taskDate = new Date(task.CreateDate).toISOString().split("T")[0];
+          const time = (parseFloat(task.TotalTime) || 0) / 60; // Convert to hours
+          dateMap[taskDate] = (dateMap[taskDate] || 0) + time; // Accumulate time for the same date
+        });
+      }
+  
+      emTotalTime = dateStrs.reduce(
+        (total, dateStr) => total + (dateMap[dateStr] || 0),
+        0
+      );
+      const emDiff = emTotalTime - emViewForceTime; // Convert `emViewForceTime` to hours for comparison
+  
+      return {
+        emId,
+        emName,
+        emTeam,
+        timeData: dateStrs.map((dateStr) => dateMap[dateStr] || 0), // Time in hours
+        emTotalTime, // Total time in hours
+        emViewForceTime, // Force viewing time in minutes
+        emDiff, // Difference in hours
+      };
+    });
+  };
+  
+  
+  const processedUserReport = processUserReport(userReport, dates);
+  
+  // setTotalTime(processedUserReport?.reduce((acc, curr) => acc + curr.emTotalTime, 0));
+  //     setDifference(processedUserReport?.reduce((acc, curr) => acc + curr.emDiff, 0));
+
+  const getRowStyle = (index) => ({
+    backgroundColor: index % 2 === 0 ? "#f0f0f0" : "white",
+  });
+
+  const transformData = (data, dates) => {
+    const dateStrs = dates.map((date) => date.toISOString().split("T")[0]);
+
+    return data.map((item) => {
+      const transformedItem = {
+        emId: item.emId,
+        emName: item.emName,
+        emTeam: item.emTeam,
+        ...dateStrs.reduce((acc, dateStr, index) => {
+          acc[dateStr] = item.timeData[index] || 0;
+          return acc;
+        }, {}),
+        emTotalTime: item.emTotalTime,
+        emViewForceTime: item.emViewForceTime,
+        emDiff: item.emDiff,
+      };
+      return transformedItem;
+    });
+  };
+
+  const downloadExcel = (data, dates) => {
+    const transformedData = transformData(data, dates);
+
+    const headerOrder = [
+      "emId",
+      "emName",
+      "emTeam",
+      ...dates.map((date) => date.toISOString().split("T")[0]),
+      "emTotalTime",
+      "emViewForceTime",
+      "emDiff",
+    ];
+
+    // Add 1 to each date for the headers
+    const headers = [
+      "Employee ID",
+      "Employee Name",
+      "Team",
+      ...dates.map((date) => {
+        const dateCopy = new Date(date);
+        dateCopy.setDate(dateCopy.getDate() + 1);
+        return dateCopy.toISOString().split("T")[0];
+      }),
+      "Total Time",
+      "View Force Time",
+      "Difference",
+    ];
+
+    // Create worksheet with headers
+    const worksheet = XLSX.utils.aoa_to_sheet([headers]);
+
+    // Append the transformed data to the worksheet
+    XLSX.utils.sheet_add_json(worksheet, transformedData, {
+      header: headerOrder,
+      skipHeader: true,
+      origin: -1,
+    });
+
+    // Create workbook and append the worksheet
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
+
+    // Generate Excel file
+    const excelBuffer = XLSX.write(workbook, {
+      bookType: "xlsx",
+      type: "array",
+    });
+    const blob = new Blob([excelBuffer], { type: "application/octet-stream" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+    link.download = "user_report.xlsx";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  useEffect(() => {
+    if (downloadFile === true) {
+      downloadExcel(processedUserReport, dates);
+      setDownloadFile(false);
+    }
+  }, [downloadFile]);
+  const tableContainerRef = useRef(null);
+  const handleMouseScroll = () => {
+    const tableContainer = tableContainerRef.current;
+
+    let isDown = false;
+    let startX;
+    let scrollLeft;
+
+    const mouseDownHandler = (e) => {
+      isDown = true;
+      tableContainer.classList.add('active');
+      startX = e.pageX - tableContainer.offsetLeft;
+      scrollLeft = tableContainer.scrollLeft;
+    };
+
+    const mouseLeaveHandler = () => {
+      isDown = false;
+      tableContainer.classList.remove('active');
+    };
+
+    const mouseUpHandler = () => {
+      isDown = false;
+      tableContainer.classList.remove('active');
+    };
+
+    const mouseMoveHandler = (e) => {
+      if (!isDown) return;
+      e.preventDefault();
+      const x = e.pageX - tableContainer.offsetLeft;
+      const walk = (x - startX) * 2; 
+      tableContainer.scrollLeft = scrollLeft - walk;
+    };
+    tableContainer.addEventListener('mousedown', mouseDownHandler);
+    tableContainer.addEventListener('mouseleave', mouseLeaveHandler);
+    tableContainer.addEventListener('mouseup', mouseUpHandler);
+    tableContainer.addEventListener('mousemove', mouseMoveHandler);
+    return () => {
+      tableContainer.removeEventListener('mousedown', mouseDownHandler);
+      tableContainer.removeEventListener('mouseleave', mouseLeaveHandler);
+      tableContainer.removeEventListener('mouseup', mouseUpHandler);
+      tableContainer.removeEventListener('mousemove', mouseMoveHandler);
+    };
+  };
+
+  const [isInfoMenuOpen, setIsInfoMenuOpen] = useState(false);
+  const infoMenuRef = useRef(null);
+
+
+  const toggleInfoMenu = () => {
+      setIsInfoMenuOpen(!isInfoMenuOpen);
+    };
+  
+    const closeInfoMenu = () => {
+      setIsInfoMenuOpen(false);
+    };
+
+     // Close the menu when clicking outside or scrolling
+useEffect(() => {
+  const handleClickOutside = (event) => {
+    if (infoMenuRef.current && !infoMenuRef.current.contains(event.target)) {
+      closeInfoMenu();
+    }
+  };
+
+  const handleScroll = () => {
+    closeInfoMenu();
+  };
+
+  document.addEventListener('mousedown', handleClickOutside);
+  window.addEventListener('scroll', handleScroll);
+
+  return () => {
+    document.removeEventListener('mousedown', handleClickOutside);
+    window.removeEventListener('scroll', handleScroll);
+  };
+}, []);
+
+
+const tttime = (processedUserReport?.reduce((acc, curr) => acc + curr.emTotalTime, 0));
+      const ttdiff = (processedUserReport?.reduce((acc, curr) => acc + curr.emDiff, 0));
+      console.log(tttime, ttdiff)
+
+useEffect(()=>{
+  if(!loading){
+    setDifference(ttdiff?ttdiff.toFixed(2):0);
+    setTotalTime(tttime?tttime.toFixed(2):0);
+  } 
+},[loading]);
+
+  return (
+    <div className="main-newcontent">
+      <ToastComponent ref={toastRef} timeout={4000} />
+      {loading && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            padding: "20px",
+          }}
+        >
+          <CircularProgress style={{ color: "purple" }} width={40} />
+        </div>
+      )}
+      {!loading && (
+       <div className="Content-week22">
+  <div style={{ display: "flex", overflow: "scroll", height: "500px" }}>
+  <div
+      style={{
+        flexShrink: 0,
+        minWidth: "200px",
+        position: "sticky",
+        left: 0,
+        overflowY: "scroll",
+        background: "white",
+        zIndex: 3,
+      }}
+    >
+            <table
+              className="user-report-table"
+            >
+              <thead>
+                <tr>
+                  <th
+                    className="content-user-2"
+                    style={{
+                      position: "sticky",
+                      left: 0,
+                      zIndex: 2,
+                      background: "white",
+                      width: "100px",
+                      height: "50px",
+                      background: "rgba(230, 230, 230, 1)",
+                      color: "rgba(24, 5, 34, 1)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    EMPLOYEE
+                  </th>
+                  <th
+                    className="content-user-line"
+                    style={{
+                      position: "sticky",
+                      left: "100px",
+                      zIndex: 2,
+                      background: "white",
+                      width: "100px",
+                      height: "50px",
+                      background: "rgba(230, 230, 230, 1)",
+                      color: "rgba(24, 5, 34, 1)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    TEAM
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {processedUserReport?.map(({ emId, emName, emTeam }, index) => (
+                  <tr
+                    key={emId}
+                    style={{
+                      backgroundColor:
+                        index % 2 === 0 ? "rgba(241, 241, 241, 1)" : "white",
+                    }}
+                  >
+                    <td
+                      className="content-user-2"
+                      style={{
+                        position: "sticky",
+                        left: 0,
+                        width: "260px",
+                        display: "flex",
+                      }}
+                    >
+                      {emName}
+                    </td>
+                    <td
+                      className="content-user-line"
+                      style={{
+                        position: "sticky",
+                        left: "100px",
+                        width: "260px",
+                        textAlign: "left",
+                      }}
+                    >
+                      {emTeam}
+                    </td>
+                    {/* 'content-user-line'  */}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+</div>
+            {/* Scrollable Middle Section */}
+            <div
+      ref={tableContainerRef}
+      style={{
+        overflowX: "auto",
+        overflowY: "auto",
+        flexGrow: 1,
+        minWidth: "600px",
+        cursor: "grab",
+        scrollbarColor: "#888 #e0e0e0",
+        scrollbarWidth: "auto",
+      }}
+      onMouseEnter={handleMouseScroll}
+    >
+              <table
+                className="user-report-table"
+                style={{ minWidth: "600px" }}
+              >
+                <thead>
+                  <tr>
+                    {dates?.map((date, index) => {
+                      const dayOfWeek = date.getDay();
+                      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                      return (
+                        <th
+                          key={index}
+                          style={{
+                            minWidth: "80px",
+                            textAlign: "center",
+                            background: "white",
+                            height: "54px",
+                          }}
+                        >
+                          <div className="gap-date">
+                            <div
+                              className="table-title-date"
+                              style={{ color: isWeekend ? "gray" : "inherit" }}
+                            >
+                              {date.getDate()}
+                            </div>
+                            <div
+                              className="table-title-week"
+                              style={{
+                                color: isWeekend ? "gray" : "inherit",
+                                display: "content",
+                              }}
+                            >
+                              {getDayOfWeek(date)}
+                            </div>
+                          </div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {processedUserReport?.map(({ emId, timeData }, index) => (
+                    <tr key={emId} style={getRowStyle(index)}>
+                      {timeData?.map((time, timeIndex) => (
+                        <td
+                          key={timeIndex}
+                          style={{
+                            minWidth: "80px",
+                            textOverflow: "ellipsis",
+                            overflow: "hidden",
+                            whiteSpace: "nowrap",
+                            height: "50px",
+                          }}
+                          className="content-user-date"
+                        >
+                          {time ? time?.toFixed(2) : "0"}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div
+      style={{
+        flexShrink: 0,
+        minWidth: "300px",
+        position: "sticky",
+        right: 0,
+        overflowY: "auto",
+        background: "white",
+        zIndex: 3,
+      }}
+    >
+            <table
+              className="user-report-table"
+              // style={{
+              //   flexShrink: 0,
+              //   minWidth: "300px",
+              //   position: "relative",
+              //   background: "white",
+              // }}
+  
+            >
+              <thead>
+                <tr>
+                  <th
+                    className="content-user-before"
+                    style={{
+                      position: "sticky",
+                      right: "200px",
+                      zIndex: 2,
+                      background: "white",
+                      width: "100px",
+                      height: "50px",
+                      background: "rgba(230, 230, 230, 1)",
+                      color: "rgba(24, 5, 34, 1)",
+                      fontWeight: 600,
+                      paddingRight: "20px",
+                    }}
+                  >
+                    TOTAL
+                  </th>
+                  <th
+                    className="content-user"
+                    style={{
+                      position: "sticky",
+                      right: "100px",
+                      zIndex: 2,
+                      background: "white",
+                      width: "100px",
+                      height: "50px",
+                      background: "rgba(230, 230, 230, 1)",
+                      color: "rgba(24, 5, 34, 1)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    VIEW FORCE
+                  </th>
+                  <th
+                    className="content-user"
+                    style={{
+                      position: "sticky",
+                      right: 0,
+                      zIndex: 2,
+                      background: "white",
+                      width: "100px",
+                      height: "50px",
+                      background: "rgba(230, 230, 230, 1)",
+                      color: "rgba(24, 5, 34, 1)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    DIFFERENCE
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {processedUserReport?.map(
+                  ({ emId, emTotalTime, emViewForceTime, emDiff }, index) => (
+                    <tr
+                      key={emId}
+                      style={{
+                        backgroundColor:
+                          index % 2 === 0 ? "rgba(241, 241, 241, 1)" : "white",
+                      }}
+                    >
+                      <td
+                        className="content-user-before"
+                        style={{
+                          position: "sticky",
+                          right: "200px",
+                          width: "100px",
+                        }}
+                      >
+                        {emTotalTime?emTotalTime?.toFixed(2):0}
+                      </td>
+                      <td
+                        className="content-user"
+                        style={{
+                          position: "sticky",
+                          right: "100px",
+                          width: "100px",
+                        }}
+                      >
+                        {emViewForceTime?emViewForceTime?.toFixed(2):0}
+                      </td>
+                      <td
+                        className="content-user"
+                        style={{ position: "sticky", right: 0, width: "100px" }}
+                      >
+                        {emDiff?emDiff?.toFixed(2):0}
+                      </td>
+                    </tr>
+                  )
+                )}
+              </tbody>
+            </table>
+            </div>
+          </div>
+        </div>
+      )}
+            {/* <Footerweek totalTIme={totalTime} difference={difference}/> */}
+            <div className='footer-container-w'>
+        <div className='footer-design'>
+            
+            <div className='footer-title'>TOTAL TIME
+
+            <button onClick={toggleInfoMenu}>
+                      <Info  className='icon-footer' weight='duotone' color='gray' />
+                      
+                    </button>
+                    </div>
+                    {isInfoMenuOpen && (
+
+                      <div className="overlay-footer"  onClick={closeInfoMenu} ref={infoMenuRef}>
+                        <div className="info-menu-footer">
+                          <ul>
+                            <li>Total Time : {totalTime}</li>
+                            <li>Total Difference : {difference}</li>
+                            
+                          </ul>
+                        </div>
+                      </div>
+                      )}
+
+            
+        </div>
+      
+    </div>
+
+    </div>
+  );
+}
+
+export default Userwise2;
